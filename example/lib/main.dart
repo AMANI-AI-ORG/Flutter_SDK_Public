@@ -1,4 +1,5 @@
 import 'package:amani_flutter_sdk/amaniAndroidConfigure.dart';
+import 'package:amanisdk_example/AmaniCredentials.dart';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:flutter/services.dart';

@@ -1,0 +1,231 @@
+name: Debug Build (APK / IPA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        type: choice
+        options: [android, ios, both]
+        default: android
+        required: true
+      flutter_version:
+        description: Flutter version
+        type: string
+        default: '3.32.8'
+        required: true
+      ios_export_method:
+        description: iOS signing/export method
+        type: choice
+        options: [debugging, release-testing]
+        default: debugging
+        required: true
+      retention_days:
+        description: Artifact retention days (1-90; subject to repository policy)
+        type: number
+        default: 14
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: debug-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android debug APK
+    if: ${{ inputs.platform == 'android' || inputs.platform == 'both' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+      - name: Write example credentials
+        working-directory: example
+        env:
+          AMANI_ID: ${{ secrets.AMANI_ID }}
+          AMANI_SERVER: ${{ secrets.AMANI_SERVER }}
+          AMANI_TOKEN: ${{ secrets.AMANI_TOKEN }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+          keys = ['AMANI_ID', 'AMANI_SERVER', 'AMANI_TOKEN']
+          missing = [k for k in keys if not os.getenv(k)]
+          if missing:
+              print('::error::Missing repository secrets: ' + ', '.join(missing))
+              sys.exit(1)
+          def dart_str(value):
+              return json.dumps(value, ensure_ascii=True).replace('$', r'\$')
+          content = ('class AmaniCredentials {\n'
+                     '  AmaniCredentials._();\n'
+                     f'  static const String id = {dart_str(os.environ["AMANI_ID"])};\n'
+                     f'  static const String server = {dart_str(os.environ["AMANI_SERVER"])};\n'
+                     f'  static const String token = {dart_str(os.environ["AMANI_TOKEN"])};\n'
+                     '}\n')
+          pathlib.Path('lib/AmaniCredentials.dart').write_text(content)
+          PY
+      - name: Build debug APK
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build apk --debug
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amani-ui-bridge-${{ github.run_number }}-${{ github.sha }}-android-apk
+          path: example/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  ios:
+    name: iOS signed IPA
+    if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+      - name: Write example credentials
+        working-directory: example
+        env:
+          AMANI_ID: ${{ secrets.AMANI_ID }}
+          AMANI_SERVER: ${{ secrets.AMANI_SERVER }}
+          AMANI_TOKEN: ${{ secrets.AMANI_TOKEN }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+          keys = ['AMANI_ID', 'AMANI_SERVER', 'AMANI_TOKEN']
+          missing = [k for k in keys if not os.getenv(k)]
+          if missing:
+              print('::error::Missing repository secrets: ' + ', '.join(missing))
+              sys.exit(1)
+          def dart_str(value):
+              return json.dumps(value, ensure_ascii=True).replace('$', r'\$')
+          content = ('class AmaniCredentials {\n'
+                     '  AmaniCredentials._();\n'
+                     f'  static const String id = {dart_str(os.environ["AMANI_ID"])};\n'
+                     f'  static const String server = {dart_str(os.environ["AMANI_SERVER"])};\n'
+                     f'  static const String token = {dart_str(os.environ["AMANI_TOKEN"])};\n'
+                     '}\n')
+          pathlib.Path('lib/AmaniCredentials.dart').write_text(content)
+          PY
+      - name: Verify signing secrets
+        env:
+          IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        shell: bash
+        run: |
+          for name in IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD IOS_PROFILE_BASE64 IOS_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing repository secret: $name"
+              exit 1
+            fi
+          done
+      - name: Import certificate and provisioning profile
+        id: signing
+        env:
+          IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        shell: bash
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/amani-build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          printf '%s' "$IOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$IOS_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/cert.p12" -P "$IOS_CERT_PASSWORD" -k "$KEYCHAIN_PATH" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist")
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy -c 'Print TeamIdentifier:0' "$RUNNER_TEMP/profile.plist")
+          PROFILE_APP_ID=$(/usr/libexec/PlistBuddy -c 'Print Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
+          if [ "$PROFILE_TEAM" != "$IOS_TEAM_ID" ]; then
+            echo '::error::Provisioning profile Team ID differs from IOS_TEAM_ID'
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/profile.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "PROFILE_APP_ID=$PROFILE_APP_ID" >> "$GITHUB_ENV"
+          echo "PROFILE_PATH=$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision" >> "$GITHUB_ENV"
+      - name: Prepare iOS project and export options
+        working-directory: example
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          EXPORT_METHOD: ${{ inputs.ios_export_method }}
+        shell: bash
+        run: |
+          flutter pub get
+          python3 - <<'PY'
+          import os, pathlib, plistlib, sys
+          project = pathlib.Path('ios/Runner.xcodeproj/project.pbxproj')
+          content = project.read_text()
+          if 'CODE_SIGN_STYLE = Automatic;' not in content and 'CODE_SIGN_STYLE = Manual;' not in content:
+              print('::error::No CODE_SIGN_STYLE found in Runner project')
+              sys.exit(1)
+          content = content.replace('CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;')
+          # Add settings only at explicit code signing style declarations.
+          content = content.replace('CODE_SIGN_STYLE = Manual;',
+             'CODE_SIGN_STYLE = Manual;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "' + os.environ['PROFILE_UUID'] + '";\n\t\t\t\tDEVELOPMENT_TEAM = ' + os.environ['IOS_TEAM_ID'] + ';')
+          project.write_text(content)
+          profile_id = os.environ['PROFILE_APP_ID']
+          expected_prefix = os.environ['IOS_TEAM_ID'] + '.'
+          if not profile_id.startswith(expected_prefix):
+              print('::error::Provisioning profile application identifier has unexpected prefix')
+              sys.exit(1)
+          bundle_id = profile_id[len(expected_prefix):]
+          if '*' in bundle_id:
+              print('::error::Use an explicit App ID provisioning profile for this workflow')
+              sys.exit(1)
+          options = {
+             'method': os.environ['EXPORT_METHOD'],
+             'teamID': os.environ['IOS_TEAM_ID'],
+             'signingStyle': 'manual',
+             'provisioningProfiles': {bundle_id: os.environ['PROFILE_UUID']},
+          }
+          with open(os.environ['RUNNER_TEMP'] + '/ExportOptions.plist', 'wb') as f:
+              plistlib.dump(options, f)
+          print('Provisioning profile Bundle ID:', bundle_id)
+          PY
+          flutter build ipa --release --export-options-plist="$RUNNER_TEMP/ExportOptions.plist"
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amani-ui-bridge-${{ github.run_number }}-${{ github.sha }}-ios-ipa
+          path: example/build/ios/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+      - name: Cleanup signing resources
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/amani-build.keychain-db" 2>/dev/null || true
+          if [ -n "${PROFILE_PATH:-}" ]; then rm -f "$PROFILE_PATH"; fi
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/profile.mobileprovision" "$RUNNER_TEMP/profile.plist"

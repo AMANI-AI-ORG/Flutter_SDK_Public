@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.32.8'
+
+jobs:
+  analyze-test:
+    name: Analyze & package validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Install package dependencies
+        run: flutter pub get
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - name: Run unit tests if present
+        shell: bash
+        run: |
+          if [ -d test ] && find test -type f -name '*_test.dart' | grep -q .; then
+            flutter test
+          else
+            echo 'No *_test.dart files found; skipping.'
+          fi
+      - name: Validate pub.dev package
+        run: flutter pub publish --dry-run
+
+  build-android:
+    name: Build example (Android debug)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Write non-production example credentials
+        working-directory: example
+        shell: bash
+        run: |
+          cat > lib/AmaniCredentials.dart <<'DART'
+          class AmaniCredentials {
+            AmaniCredentials._();
+            static const String id = 'ci';
+            static const String server = 'https://example.invalid';
+            static const String token = 'ci';
+          }
+          DART
+      - name: Build debug APK
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build apk --debug
+
+  build-ios:
+    name: Build example (iOS no codesign)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Write non-production example credentials
+        working-directory: example
+        shell: bash
+        run: |
+          cat > lib/AmaniCredentials.dart <<'DART'
+          class AmaniCredentials {
+            AmaniCredentials._();
+            static const String id = 'ci';
+            static const String server = 'https://example.invalid';
+            static const String token = 'ci';
+          }
+          DART
+      - name: Build iOS without signing
+        working-directory: example
+        run: |
+          flutter pub get
+          flutter build ios --debug --no-codesign

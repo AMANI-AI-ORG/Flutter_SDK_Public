@@ -3,6 +3,11 @@ allprojects {
         google()
         mavenCentral()
         maven { url "https://jitpack.io" }
+        maven {
+            // Amani Core SDK (moved from jfrog to GitHub)
+            url "https://raw.githubusercontent.com/AMANI-AI-ORG/android-core-sdk/main/maven"
+            content { includeGroup "ai.amani.android" }
+        }
         maven { url "https://jfrog.amani.ai/artifactory/amani-sdk" }
         maven { url "https://jfrog.amani.ai/artifactory/amani-speech-verifier" }
     }

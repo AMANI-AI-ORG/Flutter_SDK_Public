@@ -7,13 +7,13 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 class MockAmaniFlutterSdkPlatform
     with MockPlatformInterfaceMixin
     implements AmaniFlutterSdkPlatform {
-
   @override
   Future<String?> getPlatformVersion() => Future.value('42');
 }
 
 void main() {
-  final AmaniFlutterSdkPlatform initialPlatform = AmaniFlutterSdkPlatform.instance;
+  final AmaniFlutterSdkPlatform initialPlatform =
+      AmaniFlutterSdkPlatform.instance;
 
   test('$MethodChannelAmaniFlutterSdk is the default instance', () {
     expect(initialPlatform, isInstanceOf<MethodChannelAmaniFlutterSdk>());

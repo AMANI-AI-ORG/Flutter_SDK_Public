@@ -1,5 +1,3 @@
-
-
 enum AmaniAndroidDynamicFeature {
   idCapture,
   idHologramDetection,

@@ -46,5 +46,9 @@ android {
 
 dependencies {
     implementation "com.github.AMANI-AI-ORG:Android.SDK.UI:1.42.0"
+    // UI SDK 1.42.0 depends on AmaniAi:3.21.0, which is no longer published.
+    // Gradle resolves to the highest requested version, so this upgrades it.
+    implementation "ai.amani.android:AmaniAi:3.21.8"
+    implementation "com.google.code.gson:gson:2.10.1"
     compileOnly 'ai.amani.android:amani-speech-verifier:1.0.0'
 }

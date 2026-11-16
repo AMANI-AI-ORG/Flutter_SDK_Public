@@ -26,12 +26,11 @@ abstract class AmanisdkPlatform extends PlatformInterface {
 
   final methodChannel = const MethodChannel('amanisdk');
 
-   Future<void> setConfigure({
-    required String server,
-    required List<String> enabledFeatures,
-    String? sharedSecret,
-    String uploadSource = "KYC"
-  }) {
+  Future<void> setConfigure(
+      {required String server,
+      required List<String> enabledFeatures,
+      String? sharedSecret,
+      String uploadSource = "KYC"}) {
     throw UnimplementedError('configure() has not been implemented.');
   }
 
@@ -91,8 +90,6 @@ abstract class AmanisdkPlatform extends PlatformInterface {
   Future<void> setSSLPinning(
     String? certificate,
   ) async {
-    throw UnimplementedError(
-      "SSL certificate can't get path url."
-    );
+    throw UnimplementedError("SSL certificate can't get path url.");
   }
 }

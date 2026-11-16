@@ -2,3 +2,14 @@ include: package:flutter_lints/flutter.yaml
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
+
+analyzer:
+  exclude:
+    # The example has its own analysis_options.yaml and needs a git-ignored
+    # AmaniCredentials.dart, so it must not be analyzed from the package root.
+    - example/**
+
+linter:
+  rules:
+    # Public file names are part of the package API; renaming would be breaking.
+    file_names: false

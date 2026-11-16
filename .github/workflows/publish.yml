@@ -1,0 +1,110 @@
+name: Publish to pub.dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Validate release without publishing (main)
+        type: boolean
+        default: true
+        required: true
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: Verify release configuration
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate branch, tag, pubspec and changelog
+        id: check
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+            if [ "$GITHUB_REF_NAME" != 'main' ] || [ '${{ inputs.validate_only }}' != 'true' ]; then
+              echo '::error::Manual publish workflow can only validate main; it cannot publish.'
+              exit 1
+            fi
+          fi
+          VERSION=$(awk '$1 == "version:" {print $2; exit}' pubspec.yaml | tr -d '"' | tr -d "'")
+          if [ -z "$VERSION" ]; then echo '::error::Missing pubspec version'; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ ! -f CHANGELOG.md ] || ! grep -Fq "## $VERSION" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md requires a section: ## $VERSION"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = 'push' ]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo '::error::Expected an exact vMAJOR.MINOR.PATCH tag'
+              exit 1
+            fi
+            if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+              echo '::error::Release tag and pubspec version differ'
+              exit 1
+            fi
+            git fetch origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo '::error::The tagged commit must be reachable from main'
+              exit 1
+            fi
+          fi
+
+  validate:
+    name: Run CI validations
+    needs: verify-version
+    uses: ./.github/workflows/ci.yml
+
+  validation-summary:
+    name: Validation-only successful
+    needs: [verify-version, validate]
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Validation passed. No GitHub Release or pub.dev publishing occurred.'
+
+  publish:
+    name: Publish package to pub.dev
+    needs: [verify-version, validate]
+    if: ${{ github.event_name == 'push' && vars.PUBLISH_TO_PUBDEV == 'true' }}
+    runs-on: ubuntu-latest
+    environment: pub.dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.8'
+          channel: stable
+          cache: true
+      - uses: dart-lang/setup-dart@v1
+      - run: flutter pub get
+      - run: dart pub publish --force
+
+  github-release:
+    name: Create GitHub Release
+    needs: [verify-version, validate, publish]
+    if: ${{ github.event_name == 'push' && vars.PUBLISH_TO_PUBDEV == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --title "$GITHUB_REF_NAME"

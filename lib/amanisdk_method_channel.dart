@@ -2,14 +2,12 @@ import 'amanisdk_platform_interface.dart';
 
 /// An implementation of [AmanisdkPlatform] that uses method channels.
 class MethodChannelAmanisdk extends AmanisdkPlatform {
-
   @override
-  Future<void> setConfigure({
-    required String server,
-    required List<String> enabledFeatures,
-    String? sharedSecret,
-    String uploadSource = "KYC"
-  }) async {
+  Future<void> setConfigure(
+      {required String server,
+      required List<String> enabledFeatures,
+      String? sharedSecret,
+      String uploadSource = "KYC"}) async {
     await methodChannel.invokeMethod('setConfigure', <String, dynamic>{
       'server': server,
       'enabledFeatures': enabledFeatures,
@@ -48,7 +46,6 @@ class MethodChannelAmanisdk extends AmanisdkPlatform {
     );
     return result;
   }
-
 
   @override
   Future<bool?> startAmaniSDKWithToken(
@@ -93,7 +90,7 @@ class MethodChannelAmanisdk extends AmanisdkPlatform {
     String? expireDate,
     String? documentNo,
     bool? geoLocation,
-    String? lang,
+    String? language,
     String? email,
     String? phone,
     String? name,
@@ -108,7 +105,7 @@ class MethodChannelAmanisdk extends AmanisdkPlatform {
       'expireDate': expireDate,
       'documentNo': documentNo,
       'geoLocation': geoLocation,
-      'lang': lang,
+      'lang': language,
       'email': email,
       'phone': phone,
       'name': name,
@@ -116,14 +113,11 @@ class MethodChannelAmanisdk extends AmanisdkPlatform {
     return result;
   }
 
-  Future<void> setSSLPinning(
-    String? certificate
-  ) async {
-     final result = await methodChannel
-        .invokeMethod('SSLcertificate', <String, dynamic>{
-          'certificate': certificate
-        });
+  @override
+  Future<void> setSSLPinning(String? certificate) async {
+    final result = await methodChannel.invokeMethod(
+        'SSLcertificate', <String, dynamic>{'certificate': certificate});
 
-      return result;
+    return result;
   }
 }

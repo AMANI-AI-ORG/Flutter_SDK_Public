@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi';
 import 'dart:io' show Platform;
 
 import 'package:amani_flutter_sdk/sdkresult.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'amaniAndroidConfigure.dart';
 import 'amanisdk_platform_interface.dart';
@@ -28,9 +26,9 @@ class Amanisdk {
   /// [email], [phone], [name] fields are related to customer profile.
   ///
   ///
-  /// 
-  /// 
-  
+  ///
+  ///
+
   // Future<void> setConfigure({
   //   required String server,
   //   List<AmaniAndroidDynamicFeature> enabledFeatures = const [],
@@ -68,7 +66,6 @@ class Amanisdk {
     String? phone,
     String? name,
   }) async {
-    
     if (token.isEmpty) {
       throw Exception("You can't use an empty string as token");
     }
@@ -77,7 +74,6 @@ class Amanisdk {
       throw Exception("The token must be in JWT format");
     }
 
-    
     final tokenParts = token.split('.');
     if (tokenParts.length < 2) {
       throw Exception("Invalid JWT token format");
@@ -86,12 +82,11 @@ class Amanisdk {
     final payloadBytes = base64Decode(base64.normalize(tokenParts[1]));
     final payloadJson = jsonDecode(utf8.decode(payloadBytes));
 
-    
-    if (payloadJson['profile_id'] == null && payloadJson['customer_id'] == null) {
+    if (payloadJson['profile_id'] == null &&
+        payloadJson['customer_id'] == null) {
       throw Exception("You can't use admin token with this SDK.");
     }
 
-    
     AmanisdkPlatform.instance.startAmaniSDKWithConfigure(
       token,
       id,
@@ -108,7 +103,7 @@ class Amanisdk {
     _completer = Completer<SdkResult>();
     return _completer!.future;
   }
-    
+
   Future<SdkResult> startAmaniSDKWithToken({
     required String server,
     required String token,
@@ -140,28 +135,28 @@ class Amanisdk {
     List<String> tokenParts = token.split('.');
     final payloadBytes = base64Decode(base64.normalize(tokenParts[1]));
     final payloadJson = jsonDecode(utf8.decode(payloadBytes));
-   
+
     if (payloadJson['customer_id'] != null) {
       apiVersion = 'v1';
     } else if (payloadJson['profile_id'] == null) {
       throw Exception("You can't use admin token with this SDK.");
     }
-    
-    // Enjoy the ride.  
+
+    // Enjoy the ride.
     AmanisdkPlatform.instance.startAmaniSDKWithToken(
-        server,
-        token,
-        id,
-        birthDate,
-        expireDate,
-        documentNo,
-        location,
-        language,
-        email,
-        phone,
-        name,
-        apiVersion,
-        );
+      server,
+      token,
+      id,
+      birthDate,
+      expireDate,
+      documentNo,
+      location,
+      language,
+      email,
+      phone,
+      name,
+      apiVersion,
+    );
 
     _completer = Completer<SdkResult>();
     return _completer!.future;
@@ -218,6 +213,6 @@ class Amanisdk {
   Future<void> setSSLPinning(
     String? certificate,
   ) async {
-   AmanisdkPlatform.instance.setSSLPinning(certificate);
+    AmanisdkPlatform.instance.setSSLPinning(certificate);
   }
 }

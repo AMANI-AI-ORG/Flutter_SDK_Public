@@ -1,3 +1,4 @@
-## 0.0.1
+## 0.0.14
 
-* TODO: Describe initial release.
+- Maintenance and compatibility updates.
+- Flutter SDK integration improvements.

@@ -12,13 +12,14 @@ import ai.amani.sdk.UploadSource
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.net.Uri
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
+import java.util.Locale
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.gson.JsonObject
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -38,90 +39,106 @@ class AmanisdkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityA
     private var resultLauncher: ActivityResultLauncher<Intent>? = null
     private var isConfigured: Boolean = false
 
-    // Call result to use in onActivityResult
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-        currentContext = flutterPluginBinding.getApplicationContext()
-        channel = MethodChannel(flutterPluginBinding.getBinaryMessenger(), "amanisdk")
-        channel!!.setMethodCallHandler(this)
+        currentContext = flutterPluginBinding.applicationContext
+        channel = MethodChannel(flutterPluginBinding.binaryMessenger, "amanisdk").also {
+            it.setMethodCallHandler(this)
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method == "startAmaniSDKWithToken") {
-            startAmaniSDKWithToken(call, result)
-        } else if (call.method == "startAmaniSDKWithCredentials") {
-//            startAmaniSDKWithCreds(call, result)
-            result.notImplemented()
-        } else if (call.method == "setConfigure") {
-            setConfigure(call, result)
-        } else if (call.method == "startAmaniSDKWithConfigure") {
-           startAmaniSDKWithConfigure(call, result)
-        } else {
-            result.notImplemented()
+        when (call.method) {
+            "startAmaniSDKWithToken" -> startAmaniSDKWithToken(call, result)
+            "setConfigure" -> setConfigure(call, result)
+            "startAmaniSDKWithConfigure" -> startAmaniSDKWithConfigure(call, result)
+            // Credential based login is intentionally not supported on Android:
+            // passwords must not travel through the platform channel.
+            else -> result.notImplemented()
         }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        channel!!.setMethodCallHandler(null)
+        channel?.setMethodCallHandler(null)
+        channel = null
+        currentContext = null
+        isConfigured = false
     }
 
     // Gets currentActivity to pass startKYCProcess
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        currentActivity = binding.activity
+        attachActivity(binding.activity)
+    }
 
-        resultLauncher = (currentActivity as FlutterFragmentActivity)!!.registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            Log.d("Flutter Bridge", "KYC Result")
-            if (result.resultCode == Activity.RESULT_OK) {
-                // There are no request codes
-                val data: Intent? = result.data
-                data?.let {
-                    //Result of the KYC process
-                    val kycResult: KYCResult? = it.parcelable(AppConstant.KYC_RESULT)
-                    Log.d("Flutter Bridge", "KYC Result")
-                    try {
-                        val resultMap = JsonObject()
-                        if (data != null) {
-                            Log.d("Flutter Bridge", "KYC Result not null")
-                            resultMap.addProperty(
-                                "isVerificationCompleted",
-                                kycResult!!.profileStatus == ProfileStatus.APPROVED
-                            )
-                            resultMap.addProperty(
-                                "isTokenExpired",
-                                kycResult!!.errorCode == 403
-                            )
-                            resultMap.addProperty(
-                                "apiExceptionCode",
-                                kycResult!!.errorCode,
-                            )
-//                            val stepList: Map<String?, String?>?
-//                            stepList = SessionManager.getRules()
-//                            val stepRules = JsonObject()
-//                            if (stepList != null) {
-//                                for ((key, value) in stepList) {
-//                                    stepRules.addProperty(key, value)
-//                                }
-//                            }
-//                            resultMap.add("rules", stepRules)
-                            channel!!.invokeMethod("onSuccess", resultMap.toString())
-                            true
-                        } else {
-                            resultMap.addProperty("isVerificationCompleted", false)
-                            resultMap.addProperty("isTokenExpired", false)
-                            resultMap.addProperty("apiExceptionCode", 1000)
-//                                resultMap.addProperty("networkError", false)
-                            channel!!.invokeMethod("onSuccess", resultMap.toString())
-                        }
-                    } catch (e: Exception) {
-                        channel!!.invokeMethod(
-                            "onError",
-                            "Error happened while returning the result:$e"
-                        )
-                    }
-                }
-            }
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        attachActivity(binding.activity)
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        detachActivity()
+    }
+
+    override fun onDetachedFromActivity() {
+        detachActivity()
+    }
+
+    private fun attachActivity(activity: Activity) {
+        currentActivity = activity
+        // Host must extend FlutterFragmentActivity (a ComponentActivity). Do not
+        // hard-cast: a plain FlutterActivity would crash the whole app here.
+        val componentActivity = activity as? ComponentActivity
+        if (componentActivity == null) {
+            Log.e(TAG, "Host activity must extend FlutterFragmentActivity")
+            resultLauncher = null
+            return
         }
+        resultLauncher = componentActivity.registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result -> handleKycResult(result.resultCode, result.data) }
+    }
+
+    private fun detachActivity() {
+        // Drop the Activity reference to avoid leaking it past its lifecycle.
+        resultLauncher?.unregister()
+        resultLauncher = null
+        currentActivity = null
+    }
+
+    private fun handleKycResult(resultCode: Int, data: Intent?) {
+        val resultMap = JsonObject()
+        try {
+            val kycResult: KYCResult? =
+                if (resultCode == Activity.RESULT_OK) data?.parcelable(AppConstant.KYC_RESULT) else null
+            if (kycResult != null) {
+                resultMap.addProperty(
+                    "isVerificationCompleted",
+                    kycResult.profileStatus == ProfileStatus.APPROVED
+                )
+                resultMap.addProperty("isTokenExpired", kycResult.errorCode == 403)
+                resultMap.addProperty("apiExceptionCode", kycResult.errorCode)
+            } else {
+                // Cancelled / no result: always answer so the Dart future completes.
+                resultMap.addProperty("isVerificationCompleted", false)
+                resultMap.addProperty("isTokenExpired", false)
+                resultMap.addProperty("apiExceptionCode", 1000)
+            }
+            channel?.invokeMethod("onSuccess", resultMap.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to deliver KYC result", e)
+            channel?.invokeMethod("onError", "Error happened while returning the result")
+        }
+    }
+
+    /**
+     * Server must be an absolute https URL with no embedded credentials.
+     * Cleartext http is tolerated only for debuggable apps (local dev servers).
+     */
+    private fun isAllowedServer(context: Context, server: String): Boolean {
+        val uri = try { Uri.parse(server.trim()) } catch (e: Exception) { return false }
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return false
+        if (uri.host.isNullOrBlank() || !uri.userInfo.isNullOrEmpty()) return false
+        if (scheme == "https") return true
+        val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        return scheme == "http" && debuggable
     }
 
     private fun setConfigure(call: MethodCall, result: MethodChannel.Result) {
@@ -134,6 +151,10 @@ class AmanisdkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityA
     val server = call.argument<String>("server")
     if (server.isNullOrBlank()) {
         result.error("INVALID_ARGUMENT", "Argument 'server' must not be null or empty.", null)
+        return
+    }
+    if (!isAllowedServer(context, server)) {
+        result.error("INVALID_ARGUMENT", "Argument 'server' must be an https URL.", null)
         return
     }
 
@@ -180,7 +201,8 @@ class AmanisdkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityA
         isConfigured = true
         result.success(null)
     } catch (e: Exception) {
-        result.error("CONFIGURE_FAILED", "AmaniSDKUI.configure failed: ${e.message}", null)
+        Log.e(TAG, "configure failed", e)
+        result.error("CONFIGURE_FAILED", "AmaniSDKUI.configure failed", null)
     }
 }
 
@@ -242,8 +264,6 @@ private fun startAmaniSDKWithConfigure(call: MethodCall, result: MethodChannel.R
     val name = call.argument<String>("name")
 
     try {
-        result.success(null)
-
         AmaniSDKUI.goToKycActivity(
             activity = componentActivity,
             resultLauncher = launcher,
@@ -258,14 +278,10 @@ private fun startAmaniSDKWithConfigure(call: MethodCall, result: MethodChannel.R
             userPhoneNumber = phone,
             userFullName = name
         )
-
+        result.success(null)
     } catch (e: Exception) {
-        Log.e("AmaniFlutterBridge", "Failed to start KYC activity", e)
-
-        channel?.invokeMethod(
-            "onError",
-            "Failed to start KYC activity: ${e.message}"
-        )
+        Log.e(TAG, "Failed to start KYC activity", e)
+        result.error("START_KYC_FAILED", "Failed to start KYC activity", null)
     }
 }
 
@@ -304,6 +320,15 @@ private fun startAmaniSDKWithConfigure(call: MethodCall, result: MethodChannel.R
         result.error(
             "INVALID_ARGUMENT",
             "Argument 'server' must not be null or empty.",
+            null
+        )
+        return
+    }
+
+    if (!isAllowedServer(context, server)) {
+        result.error(
+            "INVALID_ARGUMENT",
+            "Argument 'server' must be an https URL.",
             null
         )
         return
@@ -356,8 +381,6 @@ private fun startAmaniSDKWithConfigure(call: MethodCall, result: MethodChannel.R
             amaniVersion = apiVersion
         )
 
-        result.success(null)
-
         AmaniSDKUI.goToKycActivity(
             activity = componentActivity,
             resultLauncher = launcher,
@@ -372,20 +395,14 @@ private fun startAmaniSDKWithConfigure(call: MethodCall, result: MethodChannel.R
             userPhoneNumber = phone,
             userFullName = name
         )
-
+        result.success(null)
     } catch (e: Exception) {
-        Log.e("AmaniFlutterBridge", "Failed to start KYC activity with token", e)
-
-        result.error(
-            "START_KYC_FAILED",
-            "Failed to start KYC activity: ${e.message}",
-            null
-        )
+        Log.e(TAG, "Failed to start KYC activity with token", e)
+        result.error("START_KYC_FAILED", "Failed to start KYC activity", null)
     }
 }
 
-    // Keep for ActivityAware implementation
-    override fun onDetachedFromActivityForConfigChanges() {}
-    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {}
-    override fun onDetachedFromActivity() {}
+    companion object {
+        private const val TAG = "AmaniFlutterBridge"
+    }
 }

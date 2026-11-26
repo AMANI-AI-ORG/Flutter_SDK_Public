@@ -6,7 +6,7 @@ import AmaniSDK
 @objc
 public class SwiftAmanisdkPlugin: NSObject, FlutterPlugin {
   let nativeSDK = AmaniUI.sharedInstance
-  var channel: FlutterMethodChannel!
+  var channel: FlutterMethodChannel?
   
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(name: "amanisdk", binaryMessenger: registrar.messenger())
@@ -16,184 +16,209 @@ public class SwiftAmanisdkPlugin: NSObject, FlutterPlugin {
   }
   
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    debugPrint("handle fonksiyonuna geldi ve \(call.method)")
-    if(call.method == "startAmaniSDKWithToken") {
-      startAmaniSDKWithToken(call: call)
+    switch call.method {
+    case "startAmaniSDKWithToken":
+      startAmaniSDKWithToken(call: call, result: result)
+    case "startAmaniSDKWithCredentials":
+      startAmaniSDKWithCredentials(call: call, result: result)
+    case "SSLcertificate":
+      setSSLPinning(call: call, result: result)
+    default:
+      result(FlutterMethodNotImplemented)
     }
-    
-    if (call.method == "startAmaniSDKWithCredentials") {
-      startAmaniSDKWithCredentials(call: call)
-    }
-    if (call.method == "SSLcertificate") {
-      DispatchQueue.global(qos: .userInitiated).async {
-        Task {
-            await self.setSSLPinning(call: call)
-        }
-      }
-    }
-    
-    } 
-  
+  }
 
-  // func setSSLPinning(call: FlutterMethodCall) async {
-  //   let params = call.arguments as! [String:Any]
-  //   let certificateURL: URL
+  // MARK: - Validation helpers
 
-  //  if let cerPathURL = params["certificate"] as? String {
-  //   certificateURL = URL(string: cerPathURL)
-  //    do {
-  //     try? await nativeSDK.setSSLPinning(certificate: certificateURL)
-  //    }catch(let error) {
-  //     debugPrint(error)
-  //     }
+  private func invalidArgument(_ result: FlutterResult, _ message: String) {
+    result(FlutterError(code: "INVALID_ARGUMENT", message: message, details: nil))
+  }
 
-  //  } 
-  // }
+  /// Absolute https URL without embedded credentials. Cleartext http is only
+  /// tolerated in DEBUG builds (local development servers).
+  private func isAllowedServer(_ server: String) -> Bool {
+    guard let url = URL(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
+          let scheme = url.scheme?.lowercased(),
+          let host = url.host, !host.isEmpty,
+          url.user == nil, url.password == nil else { return false }
+    if scheme == "https" { return true }
+    #if DEBUG
+    return scheme == "http"
+    #else
+    return false
+    #endif
+  }
 
- func setSSLPinning(call: FlutterMethodCall) async {
-    let params = call.arguments as! [String: Any]
-    do {
-        if let certificate = params["certificate"] as? String {
-          debugPrint("parametre olarak gönderdiğim değer \(certificate)")
-            guard let cerUrl = URL(string: certificate) else {
-                debugPrint("can't convert to URL")
-                return
-            }
-            debugPrint(cerUrl)
-            try? await nativeSDK.setSSLPinning(certificate: cerUrl) // Burada direkt cerUrl kullanılıyor
-        } else {
-            debugPrint("can't find certificate")
-        }
-    } catch {
-        debugPrint("ssl pinning setlenemedi. \(error)")
-    }
-}
-  
-  func startAmaniSDKWithToken(call: FlutterMethodCall) {
-       var apiVersion: ApiVersions = .v2
-      let params = call.arguments as! [String:Any]
-      //todo: location eklenecek cllocation dan.
-      //let test:CLLocation = CLLocation(coordinate: CLLocationCoordinate2D(latitude: .pi, longitude: .pi), altitude: 0, horizontalAccuracy: 0, verticalAccuracy: 0, course: 0, speed: 0, timestamp: Date(timeIntervalSinceNow: 1))
-    
-    
-   
-    var customer: CustomerRequestModel?
+  private func nonEmpty(_ value: Any?) -> String? {
+    guard let s = value as? String, !s.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+    return s
+  }
+
+  private func buildCustomer(_ params: [String: Any], id: String) -> CustomerRequestModel {
     let name = params["name"] as? String
     let email = params["email"] as? String
     let phone = params["phone"] as? String
+    if name == nil && email == nil && phone == nil {
+      return CustomerRequestModel(idCardNumber: id)
+    }
+    return CustomerRequestModel(name: name, email: email, phone: phone, idCardNumber: id)
+  }
 
-    if let apiVers = params["apiVersion"] as? String, apiVers == "v1" {
-      apiVersion = .v1
-    } 
-    
-    if (name == nil && email == nil && phone == nil) {
-      customer = CustomerRequestModel(idCardNumber: params["id"] as! String)
+  private func buildNvi(_ params: [String: Any]) -> NviModel? {
+    guard let birthDate = params["birthDate"] as? String,
+          let expireDate = params["expireDate"] as? String,
+          let documentNo = params["documentNo"] as? String else { return nil }
+    return NviModel(documentNo: documentNo, dateOfBirth: birthDate, dateOfExpire: expireDate)
+  }
+
+  // MARK: - SSL pinning
+
+  /// Applies certificate pinning. Failures are reported to Flutter instead of
+  /// being swallowed: a silently ignored pinning error means traffic is NOT
+  /// pinned while the app believes it is.
+  func setSSLPinning(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let params = call.arguments as? [String: Any],
+          let certificate = nonEmpty(params["certificate"]) else {
+      invalidArgument(result, "'certificate' must be a non-empty path")
+      return
+    }
+    let certURL: URL
+    if certificate.hasPrefix("file://"), let u = URL(string: certificate) {
+      certURL = u
+    } else if certificate.hasPrefix("/") {
+      certURL = URL(fileURLWithPath: certificate)
     } else {
-      customer = CustomerRequestModel(name: params["name"] as? String, email: params["email"] as? String, phone: params["phone"] as? String, idCardNumber: params["id"] as! String)
+      invalidArgument(result, "'certificate' must be a local file path")
+      return
     }
-    var nvi: NviModel? = nil
-    
-    if let birthDate = params["birthDate"] as? String, let expireDate = params["expireDate"] as? String, let documentNo = params["documentNo"] as? String {
-      nvi = NviModel(documentNo: documentNo , dateOfBirth: birthDate, dateOfExpire: expireDate)
+    guard FileManager.default.isReadableFile(atPath: certURL.path) else {
+      invalidArgument(result, "Certificate file is not readable")
+      return
     }
-    
-    nativeSDK.setDelegate(delegate: self)
-    // TODO: Make v2 back end usable
-    nativeSDK.set(
-      server: params["server"] as! String,
-      token: params["token"] as! String,
-      customer: customer!,
-      language: params["lang"] as? String ?? "tr",
-      nviModel: nvi,
-      apiVersion: apiVersion
-    )
-    let vc = UIApplication.shared.windows.last?.rootViewController
+    Task {
+      do {
+        try await self.nativeSDK.setSSLPinning(certificate: certURL)
+        result(nil)
+      } catch {
+        result(FlutterError(code: "SSL_PINNING_FAILED", message: "SSL pinning could not be applied", details: nil))
+      }
+    }
+  }
+
+  // MARK: - Start
+
+  func startAmaniSDKWithToken(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let params = call.arguments as? [String: Any],
+          let server = nonEmpty(params["server"]),
+          let token = nonEmpty(params["token"]),
+          let id = nonEmpty(params["id"]) else {
+      invalidArgument(result, "'server', 'token' and 'id' are required")
+      return
+    }
+    guard isAllowedServer(server) else {
+      invalidArgument(result, "'server' must be an https URL")
+      return
+    }
+
+    let apiVersion: ApiVersions = (params["apiVersion"] as? String) == "v1" ? .v1 : .v2
+    let customer = buildCustomer(params, id: id)
+    let nvi = buildNvi(params)
+    let language = params["lang"] as? String ?? "tr"
+
     DispatchQueue.main.async {
-      self.nativeSDK.showSDK(on: vc!) { (customerModel, error) in
+      guard let vc = self.topMostViewController() else {
+        result(FlutterError(code: "NO_VIEW_CONTROLLER", message: "No view controller to present from", details: nil))
+        return
+      }
+      self.nativeSDK.setDelegate(delegate: self)
+      self.nativeSDK.set(
+        server: server,
+        token: token,
+        customer: customer,
+        language: language,
+        nviModel: nvi,
+        apiVersion: apiVersion
+      )
+      self.nativeSDK.showSDK(on: vc) { (customerModel, error) in
         // no-op
       }
+      result(nil)
     }
   }
-  
-  func startAmaniSDKWithCredentials(call: FlutterMethodCall) {
-    let params = call.arguments as! [String:Any]
-    var customer: CustomerRequestModel?
-    let name = params["name"] as? String
-    let email = params["email"] as? String
-    let phone = params["phone"] as? String
-    let loginEmail = params["loginEmail"] as? String
-    let loginPassword = params["loginPassword"] as? String
-    
-    
-    if (name == nil && email == nil && phone == nil) {
-      customer = CustomerRequestModel(idCardNumber: params["id"] as! String)
-    } else {
-      customer = CustomerRequestModel(name: params["name"] as? String, email: params["email"] as? String, phone: params["phone"] as? String, idCardNumber: params["id"] as! String)
+
+  func startAmaniSDKWithCredentials(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let params = call.arguments as? [String: Any],
+          let server = nonEmpty(params["server"]),
+          let loginEmail = nonEmpty(params["loginEmail"]),
+          let loginPassword = nonEmpty(params["loginPassword"]),
+          let id = nonEmpty(params["id"]) else {
+      invalidArgument(result, "'server', 'loginEmail', 'loginPassword' and 'id' are required")
+      return
     }
-    var nvi: NviModel? = nil
-    
-    if let birthDate = params["birthDate"] as? String, let expireDate = params["expireDate"] as? String, let documentNo = params["documentNo"] as? String {
-      nvi = NviModel(documentNo: documentNo , dateOfBirth: birthDate, dateOfExpire: expireDate)
+    guard isAllowedServer(server) else {
+      invalidArgument(result, "'server' must be an https URL")
+      return
     }
-    
-    //    nativeSDK.setDelegate(delegate: self)
-    //    nativeSDK.set(
-    //        server: params["server"] as! String,
-    //        customer: customer!,
-    //        nvi: nvi,
-    //        sharedSecret: params["sharedSecret"] as? String ?? nil,
-    //        language: params["lang"] as? String ?? "tr")
-    
-    nativeSDK.setDelegate(delegate: self)
-    nativeSDK.set(
-      server: params["server"] as! String,
-      userName: loginEmail!,
-      password: loginPassword!,
-      customer: customer!,
-      language: params["lang"] as? String ?? "tr",
-      nviModel: nvi,
-      apiVersion: .v2
-    )
-    
-    let vc = UIApplication.shared.windows.last?.rootViewController
+    let customer = buildCustomer(params, id: id)
+    let nvi = buildNvi(params)
+    let language = params["lang"] as? String ?? "tr"
+
     DispatchQueue.main.async {
-      // Fire up!
-      self.nativeSDK.showSDK(on: vc!) {(customerRes, error) in
+      guard let vc = self.topMostViewController() else {
+        result(FlutterError(code: "NO_VIEW_CONTROLLER", message: "No view controller to present from", details: nil))
+        return
+      }
+      self.nativeSDK.setDelegate(delegate: self)
+      self.nativeSDK.set(
+        server: server,
+        userName: loginEmail,
+        password: loginPassword,
+        customer: customer,
+        language: language,
+        nviModel: nvi,
+        apiVersion: .v2
+      )
+      self.nativeSDK.showSDK(on: vc) { (customerRes, error) in
         // no-op
       }
+      result(nil)
     }
   }
-  
-  private func getTopMostController() -> UIViewController? {
-    let keyWindow = UIApplication.shared.windows.filter {$0.isKeyWindow}.first
-    var topController: UIViewController?
-    if (keyWindow?.rootViewController) != nil {
-      while let presentedViewController = topController?.presentedViewController {
-        topController = presentedViewController
-      }
+
+  /// Top-most presented view controller of the active foreground scene.
+  /// Replaces the deprecated `UIApplication.windows.last` lookup, which could
+  /// pick an overlay window (e.g. keyboard / alert) or crash on force unwrap.
+  private func topMostViewController() -> UIViewController? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+    let window = scene?.windows.first(where: { $0.isKeyWindow }) ?? scene?.windows.first
+    var top = window?.rootViewController
+    while let presented = top?.presentedViewController {
+      top = presented
     }
-    
-    return topController
+    return top
   }
-  
-  private func resultToJson(dictionary: [String: Any]) -> String {
-//    let jsonData = try? JSONSerialization.data(withJSONObject: dictionary)
-//    return String(data: jsonData!, encoding: .utf8)!
-    guard JSONSerialization.isValidJSONObject(dictionary) else {
-//      print("Invalid JSON object: \(dictionary)")
-      return "Invalid JSON object: \(dictionary)"
+
+  /// Platform channel calls must happen on the main thread; native SDK
+  /// delegates may call back from any queue.
+  fileprivate func send(_ method: String, _ payload: [String: Any]) {
+    let json = resultToJson(dictionary: payload)
+    DispatchQueue.main.async { [weak self] in
+      self?.channel?.invokeMethod(method, arguments: json)
     }
-    
-    do {
-      let jsonData = try JSONSerialization.data(withJSONObject: dictionary, options: [])
-      return String(data: jsonData, encoding: .utf8)!
-    } catch {
-  
-      return "JSON encode error: \(error)"
-    }
-    
   }
-  
+
+  /// Always returns valid JSON, so the Dart side can decode it.
+  fileprivate func resultToJson(dictionary: [String: Any]) -> String {
+    let fallback = "{\"isVerificationCompleted\":false,\"isTokenExpired\":false}"
+    guard JSONSerialization.isValidJSONObject(dictionary),
+          let data = try? JSONSerialization.data(withJSONObject: dictionary, options: []),
+          let json = String(data: data, encoding: .utf8) else {
+      return fallback
+    }
+    return json
+  }
+
 }
 
 
@@ -203,7 +228,7 @@ extension SwiftAmanisdkPlugin: AmaniUIDelegate {
       "isVerificationCompleted": true,
       "isTokenExpired": false,
     ]
-    channel.invokeMethod("onSuccess", arguments: resultToJson(dictionary: resultData))
+    send("onSuccess", resultData)
     
   }
   
@@ -211,9 +236,9 @@ extension SwiftAmanisdkPlugin: AmaniUIDelegate {
     let resultData: [String: Any] = [
       "isVerificationCompleted": false,
       "isTokenExpired": false,
-      "rules": Rules as Any
+      "rules": Rules ?? []
     ]
-    channel.invokeMethod("onSuccess", arguments: resultToJson(dictionary: resultData))
+    send("onSuccess", resultData)
   }
 
   public func onError(type:String,Error:[AmaniError]){
@@ -231,7 +256,7 @@ extension SwiftAmanisdkPlugin: AmaniUIDelegate {
       "rules": rulesArray
     ]
     
-    channel.invokeMethod("onError",arguments: resultToJson(dictionary:resultData))
+    send("onError", resultData)
   }
 
   

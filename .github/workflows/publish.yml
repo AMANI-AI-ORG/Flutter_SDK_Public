@@ -32,9 +32,11 @@ jobs:
       - name: Validate branch, tag, pubspec and changelog
         id: check
         shell: bash
+        env:
+          VALIDATE_ONLY: ${{ inputs.validate_only }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
-            if [ "$GITHUB_REF_NAME" != 'main' ] || [ '${{ inputs.validate_only }}' != 'true' ]; then
+            if [ "$GITHUB_REF_NAME" != 'main' ] || [ "$VALIDATE_ONLY" != 'true' ]; then
               echo '::error::Manual publish workflow can only validate main; it cannot publish.'
               exit 1
             fi
